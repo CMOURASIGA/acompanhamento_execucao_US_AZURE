@@ -1,96 +1,187 @@
-# 📊 Controle de User Stories – Azure DevOps → Google Sheets
 
-## 🎯 Objetivo
+# 🧩 Controle de User Stories – Azure DevOps → Google Sheets
 
-Automatizar a leitura das **User Stories** de todos os projetos do **Azure DevOps (CNC-TI)** e registrar, em uma planilha do Google Sheets, as principais informações de acompanhamento:
-
-- Quem criou, validou, aceitou, resolveu e concluiu cada US.  
-- As respectivas **datas** de cada etapa.  
-- Status atual e link direto para o item no DevOps.  
-
-Cada projeto é gravado em uma **aba separada** dentro da mesma planilha, chamada `Controle_US_Azure`.
+## 📘 Visão Geral
+Este projeto integra **User Stories do Azure DevOps** com o **Google Sheets**, automatizando o controle e acompanhamento de status de cada US em múltiplos projetos.  
+Além de sincronizar as informações, o sistema também gera **logs de execução** e **envia notificações por e-mail** quando há alterações de status entre execuções.
 
 ---
 
-## ⚙️ Arquitetura e Fluxo
+## 🚀 Objetivos do Script
 
-1. **Azure DevOps API**  
-   - Leitura dos projetos da organização via endpoint `/_apis/projects`.  
-   - Consulta das User Stories via **WIQL**.  
-   - Obtenção dos detalhes e histórico de cada Work Item.  
-
-2. **Google Apps Script (GAS)**  
-   - Código executado diretamente no Apps Script, conectado ao Google Drive.  
-   - Cria ou atualiza a planilha automaticamente.  
-   - Escreve os dados organizados em colunas padronizadas.
-
-3. **Planilha no Google Drive**  
-   - Uma aba por projeto (ex: SNCC, SEI, Representações, etc.).  
-   - Cada execução limpa e reescreve os dados para manter tudo atualizado.
+- Ler **User Stories** dos projetos configurados no Azure DevOps.  
+- Calcular responsáveis e datas de cada etapa:
+  - **Validado**, **Aceito**, **Resolvido** e **Concluído**.  
+- Gravar todas as informações em uma **planilha única no Google Drive**, com **uma aba por projeto**.  
+- Registrar um histórico de execução (aba `LOG_EXECUCAO`).  
+- Enviar **e-mail automático** quando forem detectadas alterações de status nas US.
 
 ---
 
-## 🧩 Estrutura do Código
+## ⚙️ Requisitos
 
-| Seção | Descrição |
-|-------|------------|
-| **Configurações gerais** | Define variáveis de organização, token, pasta e API. |
-| **Helpers genéricos** | Funções utilitárias: `extractIdentityName_`, `formatDate_`, `callAzureDevOps_`. |
-| **Camada Azure DevOps** | Busca projetos, IDs e detalhes das US, e lê histórico de transições. |
-| **Camada Google Sheets** | Cria ou abre a planilha e garante a estrutura de colunas. |
-| **Orquestração** | Sincroniza cada projeto com sua aba na planilha. |
-| **Funções de teste e debug** | Testes rápidos de token, WIQL e diagnósticos de itens específicos. |
+### 1. Azure DevOps
+- Criar um **Personal Access Token (PAT)** com permissão de leitura em *Work Items*.  
+- Armazenar o token em:
+  ```
+  Propriedades do Script → Propriedades do Projeto → AZURE_PAT
+  ```
 
----
+### 2. Google Drive
+- Criar uma **pasta dedicada** (ex: “Azure”) no seu Google Drive.  
+- Obter o **ID da pasta** (presente na URL) e preencher no código:
+  ```javascript
+  const FOLDER_ID = 'SEU_ID_DA_PASTA_AQUI';
+  ```
 
-## 📑 Campos Registrados
+- Se for usar uma **conta técnica**, ela precisa ter **permissão de Editor** nessa pasta.
 
-| Coluna | Origem / Lógica |
-|--------|-----------------|
-| **ID** | `System.Id` |
-| **Link** | URL direta para a US no Azure DevOps |
-| **Status** | `System.State` |
-| **Criado por** | `System.CreatedBy` |
-| **Data Criação** | `System.CreatedDate` formatado em `DD/MM/YYYY` |
-| **Validado por** | Primeiro `revisedBy` que mudou o estado para `Ready` |
-| **Data Validação** | Data da transição para `Ready` |
-| **Aceito por** | Primeiro `revisedBy` que mudou o estado para `Active` |
-| **Data Aceite** | Data da transição para `Active` |
-| **Resolvido por** | Primeiro `revisedBy` que mudou o estado para `Resolved` ou campo `ResolvedBy` |
-| **Data Resolvido** | Data da transição ou `ResolvedDate` |
-| **Concluído por** | Primeiro `revisedBy` que mudou o estado para `Closed/Done` ou campo `ClosedBy` |
-| **Data Concluído** | Data da transição ou `ClosedDate` |
+### 3. Planilha
+- O script cria automaticamente (na primeira execução) a planilha:
+  ```
+  Controle_US_Azure
+  ```
+  dentro da pasta configurada em `FOLDER_ID`.  
+- Se ela já existir, será atualizada — uma aba por projeto (ex: `SNCC`, `SEI`, etc.).
 
 ---
 
-## 🔑 Pré-requisitos
+## 🧠 Estrutura do Script
 
-1. **Personal Access Token (PAT)** válido com permissão de leitura em *Work Items* e *Projects*.  
-2. No Apps Script, criar uma **Script Property**:  
-   - Nome: `AZURE_PAT`  
-   - Valor: `<seu_token>`  
-3. Garantir que exista a pasta no Google Drive com o ID definido em `FOLDER_ID`.
-
----
-
-## 🚀 Funções Principais
+### Principais funções:
 
 | Função | Descrição |
 |--------|------------|
-| `syncAllProjects()` | Sincroniza **todos** os projetos da organização. |
-| `syncProjectToSheet_(projectName)` | Sincroniza apenas um projeto específico. |
-| `syncProjetoSNCC()` | Exemplo de teste individual (pode alterar o nome do projeto). |
+| `listProjects_()` | Lista todos os projetos ativos na organização do Azure DevOps. |
+| `fetchUserStoryIds_(projectName)` | Retorna os IDs das User Stories via WIQL. |
+| `fetchUserStoriesDetails_(projectName, ids)` | Busca detalhes das US em lotes. |
+| `getFirstTransitionInfo_(...)` | Determina quem e quando mudou uma US para um determinado estado. |
+| `getOrCreateSpreadsheet_()` | Cria ou abre a planilha `Controle_US_Azure` dentro da pasta configurada. |
+| `ensureProjectSheet_()` | Garante que a aba do projeto existe e escreve o cabeçalho. |
+| `syncProjectToSheet_(projectName)` | Sincroniza um projeto específico (lê, calcula e grava na aba). |
+| `syncAllProjects()` | Sincroniza todos os projetos da organização. |
+| `notifyUserStoryChanges_(currentItems)` | Detecta mudanças de status e envia e-mail automático. |
 
 ---
 
-## 🔄 Execução Automática (Opcional)
+## 📨 Envio de E-mails Automáticos
 
-Para executar de forma agendada, adicione este trecho:
+### Configurações principais
 
 ```javascript
-function createSyncTrigger() {
-  ScriptApp.newTrigger('syncAllProjects')
-    .timeBased()
-    .everyHours(6) // ou everyDays(1)
-    .create();
-}
+const EMAIL_NOTIFICATIONS_ENABLED = true;  // define se o envio está ativo
+const EMAIL_FROM_NAME = 'Christian Moura dos Santos';
+const EMAIL_REPLY_TO = 'christian_7c@cnc.org.br';
+const EMAIL_FROM_ADDRESS = 'contactconsultservices@gmail.com';  // conta técnica
+const EMAIL_TO = 'sistemas@cnc.org.br';  // destinatário padrão
+```
+
+### Conteúdo do e-mail
+
+- O e-mail inclui:
+  - Data da execução
+  - Tabela com: Projeto, ID, Status anterior, Status atual, **Data da ação** e link direto da US
+  - Link para a planilha completa
+- As cores seguem a paleta corporativa CNC:
+  - Azul escuro `#004d73`
+  - Branco `#ffffff`
+  - Cinza claro `#f5f9fc`
+
+Exemplo de assunto:
+```
+Atualização de User Stories – Azure DevOps
+```
+
+---
+
+## 🗂 Estrutura da Planilha
+
+Cada aba (um projeto) contém:
+
+| Coluna | Descrição |
+|--------|------------|
+| ID | Identificador da User Story |
+| Link | Link direto no Azure DevOps |
+| Status | Estado atual |
+| Criado por | Autor original |
+| Data Criação | Data de criação |
+| Validado por / Data Validação | Quem validou e quando |
+| Aceito por / Data Aceite | Responsável por ativar a US |
+| Resolvido por / Data Resolvido | Quem marcou como resolvido |
+| Concluído por / Data Concluído | Quem finalizou e data de fechamento |
+
+Além disso, existe a aba `LOG_EXECUCAO`:
+| Projeto | ID | Status | Link |
+
+Essa aba é usada para detectar alterações entre execuções.
+
+---
+
+## 🔁 Gatilhos (Triggers)
+
+- Configure um gatilho **baseado em tempo** (ex: diário às 07:00) para a função:
+  ```javascript
+  syncAllProjects
+  ```
+- **Importante:**  
+  O gatilho precisa estar **criado na conta técnica** (ex: `contactconsultservices@gmail.com`)  
+  — é ela quem precisa ter acesso ao Drive e à planilha.
+
+---
+
+## 🧩 Fluxo Resumido de Execução
+
+1. **syncAllProjects()**
+   - Lista projetos do Azure DevOps.
+   - Para cada um:
+     - Busca US e escreve na planilha.
+     - Retorna um snapshot com ID, status e datas.
+
+2. **notifyUserStoryChanges_()**
+   - Compara o snapshot atual com o `LOG_EXECUCAO`.
+   - Identifica US novas ou com mudança de status.
+   - Atualiza o `LOG_EXECUCAO`.
+   - Se houver mudanças, monta o e-mail e envia.
+
+3. **buildEmailBody_()**
+   - Monta o HTML com cores CNC, tabela e link da planilha.
+
+---
+
+## 🧩 Testes e Diagnóstico
+
+| Função | Uso |
+|--------|-----|
+| `testAzureToken()` | Valida se o PAT e o acesso ao Azure estão corretos. |
+| `testListUserStories()` | Retorna amostra de IDs de User Stories. |
+| `debugConclusao_5523()` | Debug detalhado de transição de status (exemplo real de US). |
+| `testNotifySingleProject()` | Sincroniza um projeto e dispara e-mail de teste com as mudanças detectadas. |
+
+---
+
+## ⚠️ Permissões e Cuidados
+
+- Se o erro for:
+  ```
+  Exception: Access denied: DriveApp.
+  ```
+  então a conta técnica **não tem acesso à pasta do Drive** (`FOLDER_ID`).
+
+  ➜ Solução:  
+  No Drive, compartilhe a pasta com a conta técnica como **Editor**.
+
+- O script só pode enviar e-mails pela conta que o executa.
+  Se quiser usar uma conta técnica para envio, ela precisa rodar o script.
+
+- Se o `EMAIL_NOTIFICATIONS_ENABLED` estiver `false`, o log será atualizado mas nenhum e-mail será enviado.
+
+---
+
+## 🧾 Histórico de Evolução
+
+| Data | Alteração |
+|------|------------|
+| 2025-10 | Versão inicial da integração Azure → Sheets |
+| 2025-11 | Adicionado controle de LOG_EXECUCAO e e-mail automático |
+| 2025-11 | Implementadas cores CNC e link direto da planilha |
+| 2025-11 | Correção de permissão de DriveApp e suporte a conta técnica |
