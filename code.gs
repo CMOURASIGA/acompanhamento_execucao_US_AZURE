@@ -26,7 +26,23 @@ const VALIDATED_STATES = ['Ready'];
 const ACCEPTED_STATES  = ['Active'];
 const RESOLVED_STATES  = ['Resolved'];
 const CLOSED_STATES    = ['Closed', 'Done'];
+// Link direto da planilha de controle
+// Substitua pelo link real da sua planilha
+const SPREADSHEET_URL = 'https://docs.google.com/spreadsheets/d/1G0slu7kbVqXucRrZTnEpcgsfGEjr4S1b6RHS7IGs9VM/edit';
 
+
+/**
+ * Configurações de e-mail
+ * Observação: o Apps Script sempre envia a partir da conta que está executando o script.
+ * Estas constantes controlam nome, destinatário e se o envio está habilitado.
+ */
+const EMAIL_NOTIFICATIONS_ENABLED = false; // coloque false se quiser desligar
+
+const EMAIL_FROM_NAME = 'Christian Moura dos Santos';          // nome que aparece no "De"
+const EMAIL_REPLY_TO  = 'christian_7c@cnc.org.br';             // para onde vão as respostas CNC - Sistemas de TI <sistemas@cnc.org.br>
+const EMAIL_FROM_ADDRESS = 'contactconsultservices@gmail.com'; // conta técnica que executa o script (informativo)
+
+const EMAIL_TO = 'christian_7c@cnc.org.br';                        // destinatário padrão
 
 /***********************************************************************************
  * HELPERS GENÉRICOS
@@ -319,7 +335,7 @@ function syncProjectToSheet_(projectName) {
     Logger.log('Nenhuma US encontrada para o projeto: ' + projectName);
     var lastRow = sheet.getLastRow();
     if (lastRow > 1) sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).clearContent();
-    return;
+    return [];
   }
 
   Logger.log('Buscando detalhes das US...');
@@ -327,6 +343,7 @@ function syncProjectToSheet_(projectName) {
   Logger.log('Detalhes obtidos para ' + items.length + ' US.');
 
   var rows = [];
+  var snapshot = []; // usado para comparação e envio de e-mail
   var counter = 0;
 
   items.forEach(function(item) {
@@ -360,7 +377,7 @@ function syncProjectToSheet_(projectName) {
 
     // Resolvido por / data resolvido
     var resolvidoPor = infoResolvido.by ||
-                      extractIdentityName_(f['Microsoft.VSTS.Common.ResolvedBy']);
+                       extractIdentityName_(f['Microsoft.VSTS.Common.ResolvedBy']);
 
     var dataResolvido = formatDate_(infoResolvido.date);
     if (!dataResolvido) {
@@ -369,7 +386,7 @@ function syncProjectToSheet_(projectName) {
 
     // Concluído por / data concluído
     var concluidoPor = infoConcluido.by ||
-                      extractIdentityName_(f['Microsoft.VSTS.Common.ClosedBy']);
+                       extractIdentityName_(f['Microsoft.VSTS.Common.ClosedBy']);
 
     var dataConcluido = formatDate_(infoConcluido.date);
     if (!dataConcluido) {
@@ -391,29 +408,307 @@ function syncProjectToSheet_(projectName) {
       concluidoPor,
       dataConcluido
     ]);
-  });
+
+    // snapshot com informações extras para o e-mail
+    snapshot.push({
+      projectName: projectName,
+      id: id,
+      status: status,
+      link: link,
+      dataCriacao: dataCriacao,
+      dataValidacao: dataValidacao,
+      dataAceite: dataAceite,
+      dataResolvido: dataResolvido,
+      dataConcluido: dataConcluido
+    });
+  }); // <- fecha o forEach aqui ✅
 
   Logger.log('Escrevendo ' + rows.length + ' linhas na planilha...');
   sheet.getRange(2, 1, rows.length, 13).setValues(rows);
 
   Logger.log('Sincronização concluída para o projeto: ' + projectName);
+
+  // devolve snapshot para quem chamou (syncAllProjects)
+  return snapshot;
 }
+
+
 
 /**
  * Sincroniza todos os projetos da organização
  */
 function syncAllProjects() {
   var projectNames = listProjects_(); // Ex: SNCC, Arrecadação, SEI, etc.
+  var globalSnapshot = [];
+
   projectNames.forEach(function(name) {
-    syncProjectToSheet_(name);
+    var projectSnapshot = syncProjectToSheet_(name);
+    globalSnapshot = globalSnapshot.concat(projectSnapshot);
   });
+
+  if (EMAIL_NOTIFICATIONS_ENABLED) {
+    notifyUserStoryChanges_(globalSnapshot);
+  } else {
+    Logger.log('Envio de e-mails desabilitado (EMAIL_NOTIFICATIONS_ENABLED = false).');
+  }
 }
+
 
 /**
  * Sincroniza apenas um projeto específico – útil para testes
  */
 function syncProjetoSNCC() {
-  syncProjectToSheet_('Representações'); // troque o nome do projeto se quiser testar outro
+  syncProjectToSheet_('SEI'); // troque o nome do projeto se quiser testar outro
+}
+
+/***********************************************************************************
+ * NOTIFICAÇÃO POR E-MAIL – MUDANÇA DE STATUS DE USER STORIES
+ ***********************************************************************************/
+
+/**
+ * Monta o HTML do e-mail com a lista de mudanças
+ * @param {Object[]} changedItems
+ * @return {string} html
+ */
+function buildEmailBody_(changedItems) {
+  var dataExecucao = formatDate_(new Date());
+
+  // Cores da identidade visual CNC
+  var cncBlue = '#004d73';      // Azul CNC (principal)
+  var cncGold = '#c9a055';      // Dourado CNC (destaque)
+  var lightBlue = '#e8f4f8';    // Azul claro para alternância
+  var borderColor = '#d0d0d0';
+  var textColor = '#333333';
+
+  var html = '';
+
+  // Container principal com borda sutil
+  html += '<div style="font-family: Arial, Helvetica, sans-serif; font-size: 14px; color: ' + textColor + '; max-width: 900px; margin: 0 auto; background-color: #ffffff;">';
+
+  // Header com título (sem logo)
+  html += '<div style="background-color: ' + cncBlue + '; padding: 25px 20px; text-align: center; border-radius: 8px 8px 0 0;">';
+  html += '<h1 style="color: #ffffff; margin: 0; font-size: 22px; font-weight: 600; letter-spacing: 0.5px;">CNC</h1>';
+  html += '<h2 style="color: ' + cncGold + '; margin: 8px 0 0 0; font-size: 18px; font-weight: 500;">Atualização de User Stories - Azure DevOps</h2>';
+  html += '</div>';
+
+  // Conteúdo principal
+  html += '<div style="padding: 30px 20px; background-color: #ffffff;">';
+
+  html += '<p style="line-height: 1.6; margin-bottom: 15px;">Prezada equipe de Sistemas de TI,</p>';
+
+  html += '<p style="line-height: 1.6; margin-bottom: 15px;">Seguem abaixo as User Stories do Azure DevOps que tiveram alteração de status após o último processamento.</p>';
+
+  // Badge com data de execução
+  html += '<div style="background-color: ' + lightBlue + '; border-left: 4px solid ' + cncGold + '; padding: 12px 15px; margin: 20px 0; border-radius: 4px;">';
+  html += '<p style="margin: 0; font-weight: 600;"><span style="color: ' + cncBlue + ';">📅 Data da execução:</span> ' + dataExecucao + '</p>';
+  html += '</div>';
+
+  // Link para planilha em destaque
+  html += '<div style="background-color: #f9f9f9; padding: 15px; border-radius: 6px; margin: 20px 0; border: 1px solid ' + borderColor + ';">';
+  html += '<p style="margin: 0 0 8px 0; font-weight: 600; color: ' + cncBlue + ';">📊 Planilha de Controle</p>';
+  html += '<p style="margin: 0;">Consulte o detalhamento completo em: ';
+  html += '<a href="' + SPREADSHEET_URL + '" target="_blank" style="color: ' + cncGold + '; text-decoration: none; font-weight: 600;">Controle_US_Azure →</a></p>';
+  html += '</div>';
+
+  // Título da tabela
+  html += '<h3 style="color: ' + cncBlue + '; font-size: 16px; margin: 25px 0 15px 0; border-bottom: 2px solid ' + cncGold + '; padding-bottom: 8px;">Alterações Identificadas</h3>';
+
+  // Tabela responsiva com melhor compatibilidade
+  html += '<div style="overflow-x: auto;">';
+  html += '<table border="0" cellpadding="12" cellspacing="0" style="border-collapse: collapse; font-family: Arial, sans-serif; font-size: 13px; width: 100%; border: 1px solid ' + borderColor + ';">';
+
+  // Cabeçalho da tabela (sem gradiente para melhor compatibilidade)
+  html += '<thead>';
+  html += '<tr style="background-color: ' + cncBlue + '; color: #ffffff;">';
+  html += '<th align="left" style="padding: 14px 12px; border-bottom: 3px solid ' + cncGold + '; font-weight: 600; white-space: nowrap;">Projeto</th>';
+  html += '<th align="center" style="padding: 14px 12px; border-bottom: 3px solid ' + cncGold + '; font-weight: 600; white-space: nowrap;">ID</th>';
+  html += '<th align="left" style="padding: 14px 12px; border-bottom: 3px solid ' + cncGold + '; font-weight: 600; white-space: nowrap;">Status Anterior</th>';
+  html += '<th align="left" style="padding: 14px 12px; border-bottom: 3px solid ' + cncGold + '; font-weight: 600; white-space: nowrap;">Status Atual</th>';
+  html += '<th align="center" style="padding: 14px 12px; border-bottom: 3px solid ' + cncGold + '; font-weight: 600; white-space: nowrap;">Data da Ação</th>';
+  html += '<th align="center" style="padding: 14px 12px; border-bottom: 3px solid ' + cncGold + '; font-weight: 600; white-space: nowrap;">Ação</th>';
+  html += '</tr>';
+  html += '</thead>';
+
+  html += '<tbody>';
+  changedItems.forEach(function(item, index) {
+    var rowBg = (index % 2 === 0) ? '#ffffff' : lightBlue;
+
+    html += '<tr style="background-color: ' + rowBg + ';">';
+    html += '<td style="padding: 12px; border-bottom: 1px solid ' + borderColor + ';">' + item.projectName + '</td>';
+    html += '<td align="center" style="padding: 12px; border-bottom: 1px solid ' + borderColor + '; font-family: monospace; font-weight: 600; color: ' + cncBlue + ';">' + item.id + '</td>';
+    html += '<td style="padding: 12px; border-bottom: 1px solid ' + borderColor + '; color: #666;">' + (item.oldStatus || '—') + '</td>';
+    html += '<td style="padding: 12px; border-bottom: 1px solid ' + borderColor + '; font-weight: 600; color: ' + cncBlue + ';">' + item.newStatus + '</td>';
+    html += '<td align="center" style="padding: 12px; border-bottom: 1px solid ' + borderColor + '; font-size: 12px;">' + (item.actionDate || '—') + '</td>';
+    html += '<td align="center" style="padding: 12px; border-bottom: 1px solid ' + borderColor + ';">';
+    html += '<a href="' + item.link + '" target="_blank" style="background-color: ' + cncGold + '; color: #ffffff; padding: 6px 16px; text-decoration: none; border-radius: 4px; font-weight: 600; font-size: 12px; display: inline-block;">Abrir</a>';
+    html += '</td>';
+    html += '</tr>';
+  });
+  html += '</tbody>';
+
+  html += '</table>';
+  html += '</div>';
+
+  // Nota informativa
+  html += '<div style="margin-top: 25px; padding: 15px; background-color: #f0f0f0; border-radius: 6px; font-size: 12px; color: #666;">';
+  html += '<p style="margin: 0;"><strong>ℹ️ Informação:</strong> Este e-mail foi enviado automaticamente pela rotina de integração entre Azure DevOps e Google Sheets.</p>';
+  html += '</div>';
+
+  html += '</div>'; // Fim do conteúdo principal
+
+  // Assinatura (alinhada à direita)
+  html += '<div style="margin-top: 30px; text-align: left; padding-right: 20px;">';
+  html += '<p style="color: #333; margin: 0 0 5px 0; font-size: 14px;">Atenciosamente,</p>';
+  html += '<p style="color: ' + cncBlue + '; margin: 0; font-weight: 600; font-size: 15px;">' + EMAIL_FROM_NAME + '</p>';
+  html += '</div>';
+
+  html += '</div>'; // Fim do conteúdo principal
+
+  // Footer institucional
+  html += '<div style="background-color: ' + cncBlue + '; padding: 15px 20px; text-align: center; border-radius: 0 0 8px 8px;">';
+  html += '<p style="color: rgba(255,255,255,0.8); margin: 0; font-size: 11px;">Confederação Nacional do Comércio de Bens, Serviços e Turismo</p>';
+  html += '</div>';
+
+  html += '</div>'; // Fim do container principal
+
+  return html;
+}
+
+
+/**
+ * Decide qual data usar como "data da ação" de acordo com o status atual
+ * Closed  -> Data Concluído
+ * Resolved -> Data Resolvido
+ * Active  -> Data Aceite
+ * Ready   -> Data Validação
+ * New / outros -> Data Criação
+ */
+function getActionDateForStatus_(item) {
+  var s = item.status || '';
+
+  if (CLOSED_STATES.indexOf(s) !== -1) {
+    return item.dataConcluido || item.dataResolvido || item.dataAceite || item.dataValidacao || item.dataCriacao || '';
+  }
+
+  if (RESOLVED_STATES.indexOf(s) !== -1) {
+    return item.dataResolvido || item.dataConcluido || item.dataAceite || item.dataValidacao || item.dataCriacao || '';
+  }
+
+  if (ACCEPTED_STATES.indexOf(s) !== -1) {
+    return item.dataAceite || item.dataValidacao || item.dataCriacao || '';
+  }
+
+  if (VALIDATED_STATES.indexOf(s) !== -1) {
+    return item.dataValidacao || item.dataCriacao || '';
+  }
+
+  // fallback para itens novos ou estados não mapeados
+  return item.dataCriacao || '';
+}
+
+
+
+/**
+ * Compara o snapshot atual com o LOG_EXECUCAO e, se houver mudanças, envia e-mail
+ * @param {Object[]} currentItems [{projectName, id, status, link}, ...]
+ */
+function notifyUserStoryChanges_(currentItems) {
+  var ss = getOrCreateSpreadsheet_();
+  var logSheetName = 'LOG_EXECUCAO';
+  var logSheet = ss.getSheetByName(logSheetName);
+  var firstRun = false;
+  var previousMap = {}; // chave: "Projeto|ID" -> status anterior
+
+  // Carrega LOG_EXECUCAO anterior
+  if (logSheet) {
+    var data = logSheet.getDataRange().getValues();
+    if (data.length > 1) {
+      data.slice(1).forEach(function(row) {
+        var project = row[0];
+        var id = row[1];
+        var status = row[2];
+        var key = project + '|' + id;
+        previousMap[key] = status;
+      });
+    } else {
+      firstRun = true;
+    }
+  } else {
+    logSheet = ss.insertSheet(logSheetName);
+    firstRun = true;
+  }
+
+  // Detecta mudanças
+  var changedItems = [];
+
+  currentItems.forEach(function(item) {
+    var key = item.projectName + '|' + item.id;
+    var prevStatus = previousMap[key];
+
+    var actionDate = getActionDateForStatus_(item);
+
+    if (!prevStatus) {
+      // US nova no snapshot (não existia antes)
+      changedItems.push({
+        projectName: item.projectName,
+        id: item.id,
+        link: item.link,
+        oldStatus: 'N/A',
+        newStatus: item.status,
+        actionDate: actionDate
+      });
+    } else if (prevStatus !== item.status) {
+      // US com mudança de status
+      changedItems.push({
+        projectName: item.projectName,
+        id: item.id,
+        link: item.link,
+        oldStatus: prevStatus,
+        newStatus: item.status,
+        actionDate: actionDate
+      });
+    }
+
+  });
+
+  // Atualiza LOG_EXECUCAO com o snapshot atual (sempre)
+  logSheet.clear();
+  var header = ['Projeto', 'ID', 'Status', 'Link'];
+  logSheet.getRange(1, 1, 1, header.length).setValues([header]);
+
+  var logRows = currentItems.map(function(item) {
+    return [item.projectName, item.id, item.status, item.link];
+  });
+
+  if (logRows.length > 0) {
+    logSheet.getRange(2, 1, logRows.length, header.length).setValues(logRows);
+  }
+
+  // Primeira execução: só monta o LOG, mas não manda e-mail
+  if (firstRun) {
+    Logger.log('Primeira execução: LOG_EXECUCAO inicializado, sem envio de e-mail.');
+    return;
+  }
+
+  // Se não houve mudanças, não manda e-mail
+  if (changedItems.length === 0) {
+    Logger.log('Nenhuma alteração de status encontrada, não enviando e-mail.');
+    return;
+  }
+
+  // Monta corpo do e-mail
+  var htmlBody = buildEmailBody_(changedItems);
+
+  // Envia e-mail
+  MailApp.sendEmail({
+    to: EMAIL_TO,
+    subject: 'Atualização de User Stories – Azure DevOps',
+    name: EMAIL_FROM_NAME,
+    replyTo: EMAIL_REPLY_TO,
+    htmlBody: htmlBody
+  });
+
+  Logger.log('E-mail enviado para ' + EMAIL_TO + ' com ' + changedItems.length + ' alterações.');
 }
 
 
@@ -493,5 +788,13 @@ function debugConclusao_5523() {
   // 3) Ver o que nossa função está calculando hoje
   var infoConcluido = getFirstTransitionInfo_(projectName, workItemId, CLOSED_STATES);
   Logger.log('getFirstTransitionInfo_ (CLOSED): ' + JSON.stringify(infoConcluido));
+}
+
+function testNotifySingleProject() {
+  // roda só o projeto SEI (pode trocar o nome se quiser)
+  var snapshot = syncProjectToSheet_('SEI'); 
+
+  // usa o snapshot real para comparar com o LOG e, se tiver mudança, mandar e-mail
+  notifyUserStoryChanges_(snapshot);
 }
 
